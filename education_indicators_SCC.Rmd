@@ -314,7 +314,7 @@ scc_pums_internet <-
 
 ```
 
-## Map of Inaccess to Internet for K-12 Students
+## Map of Access to Internet for K-12 Students
 
 Figure 2, presented below, shows that there are not many substantial gaps in access to the Internet for K-12 students in Santa Clara County. There is not a single PUMA with more than 1% of K-12 students lacking access to the Internet.
 
