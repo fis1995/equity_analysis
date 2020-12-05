@@ -1,0 +1,644 @@
+---
+title: "Key Educational Indicators in Santa Clara County"
+author: "Francine Stephens"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: html_document
+---
+
+# Educational Equity in Santa Clara County
+
+**OBJECTIVE: To understand how the county performs on important educational metrics.** 
+
+* How does educational attainment vary by race in Santa Clara? 
+* Are there gaps in access to Internet for Santa Clara County's K-12 students?
+* What is the state of educational mobility in Santa Clara County? 
+  + Is the increasing educational attainment in the county a result of educational mobility, or is it the product of more highly-educated newcomers displacing less-educated residents?
+
+This report includes three separate mini-analyses that answer the three questions listed above in turn. ACS data are used in each of the three analyses. The particular measures that were used as well as the analytic decisions will be described before the discussion of the findings. 
+
+```{r setup, include=F}
+knitr::opts_chunk$set(echo = T, warning = F, message = F)
+
+### LIBRARIES
+packages <- c(
+              "tidyverse",
+              "sf",
+              "ggplot2",
+              "plotly",
+              "tigris",
+              "leaflet",
+              "RColorBrewer", 
+              "censusapi", 
+              "tidycensus"
+              )
+lapply(packages, library, character.only = T)
+
+setwd("~/Stanford/equity_analysis")
+
+```
+
+## Educational Attainment by Race
+
+**About the Data Preparation**
+
+* **Data:** ACS-2018 5-year estimates. 
+* **Outcome of Interest:** Educational Attainment.
+The population is limited to residents 25 years and older for educational attainment. This measure is based on the highest level of education a person completed. There are 4 categories for educational attainment. 
+  + Less than high school diploma
+  + High school graduate or GED
+  + Some college or associate's degree
+  + Bachelor's degree or higher
+* **Groups of Interest:** Race groups.
+There are 7 racial categories. Hispanic/Latinx ethnicity is not considered with race. 
+  + White Alone
+  + Black or African American Alone
+  + American Indian and Alaska Native Alone
+  + Asian Alone
+  + Native Hawaiian and Other Pacific Islander Alone
+  + Some other race Alone
+  + Two or more races
+* **Measurement:** Counts of people in each educational attainment level-race category were transformed to proportions.** This way the graph shows the relative share of each race-group in each educational-level and the share of each race-group in the county overall.
+  + *The upside of presenting proportions rather than counts of people per category is that it allows for the construction of odds-ratios, which can give us a sense of disproportionate rates of attainment by a race-group relative to their share of the county's total population.*
+  
+
+```{r load data and parameters}
+# PARAMETERS
+Sys.setenv(CENSUS_KEY="99ccb52a629609683f17f804ca875115e3f0804c")
+
+census_race_labels <- c(
+      "White Alone",
+      "Black or African American Alone",
+      "American Indian and Alaska Native Alone",
+      "Asian Alone",
+      "Native Hawaiian and Other Pacific Islander Alone",
+      "Some Other Race Alone",
+      "Two or More Races"
+    )
+
+# DATA SET-UP
+acs_vars_2018_5yr <- readRDS("acs_vars_2018_5yr.rds")
+
+scc_edbyrace <- 1:7 %>% 
+  map_dfr(function(x){
+    getCensus(
+      name = "acs/acs5",
+      vintage = 2018,
+      region = "county:085",
+      regionin = "state:06",
+      vars = paste0("group(C15002",LETTERS[x],")")
+    ) %>%
+      select(!c(GEO_ID,state,NAME) & !ends_with(c("EA","MA","M"))) %>%
+      pivot_longer(
+        ends_with("E"),
+        names_to = "variable",
+        values_to = "estimate"
+      ) %>%
+      left_join(
+        acs_vars_2018_5yr %>% 
+          select(name, label), 
+        by = c("variable" = "name")
+      ) %>% 
+      select(-variable) %>% 
+      separate(
+        label,
+        into = c(NA, NA, NA, "educational_attainment"),
+        sep = "!!"
+      ) %>% 
+      filter(!is.na(educational_attainment)) %>% 
+      mutate(race = census_race_labels[x])
+  })
+  
+scc_race_totals <- scc_edbyrace %>% 
+  group_by(race) %>% 
+  summarize(estimate = sum(estimate)) %>% 
+  mutate(educational_attainment = "Total")
+
+```
+
+## Equity Analysis Graph
+
+Figure 1, presented below, shows highest level of education attained by race in the county. 
+
+```{r equity analysis graph}
+# Stacked bar-graph of educational attainment by race 
+stacked_edbyrace <- scc_edbyrace %>% 
+  group_by(educational_attainment, race) %>% 
+  summarize(estimate = sum(estimate)) %>% 
+  rbind(scc_race_totals) %>% 
+  mutate(educational_attainment = 
+           gsub("\\(.*?)",
+                "or GED",
+                educational_attainment)) %>%
+  ggplot() +
+  geom_bar(
+    aes(
+      x = fct_relevel(educational_attainment,
+                      "Less than high school diploma",
+                       "High school graduate or GED",
+                       "Some college or associate's degree",
+                       "Bachelor's degree or higher",
+                       "Total"),
+      y = estimate,
+      fill = race
+    ),
+    stat = "identity",
+    position = "fill"
+  ) +
+  scale_fill_brewer(palette = "Set1") +
+  labs(
+    x = "Educational Attainment",
+    y = "Proportion of Residents 25 years and older",
+    title = "Figure 1: Educational Attainment by Race",
+    subtitle = "Santa Clara County, CA",
+    fill = "Race",
+    caption = "Source: ACS-2018 5-year estimates"
+  ) +
+  coord_flip() + theme_classic() +
+  theme(
+    legend.position = "bottom",
+    legend.direction = "vertical",
+    axis.text.x = element_text( hjust=1)
+    )
+
+stacked_edbyrace 
+
+```
+
+# Equity Analysis Takeaways
+**Asians are over-represented in the BA or higher educational attainment level.** They make-up about 37.5% of the county and have earned 47.5% of the Bachelor's degrees or graduate/professional degrees in the county. According to Calculation 1 below, **Asians are about 27% more likely to have attained a BA or higher degree than we would expect if the educational attainment were race-blind.** 
+
+**Whites' proportion in the highest level of educational attainment is nearly proportionate to their overall composition in the county.** Specifically, whites have earned 45.8% of the Bachelor's or professional/graduate degrees, and white residents compose 47.1% of the county. However, white residents are slightly over-represented in the attainment of some college and associate's degrees, which represents the second-highest level of educational attainment. 
+
+**Some other race is substantially over-represented in the category of less than high school degree attainment.** 9.1% of the county's residents identify as some other race, but they make-up 28.9% of the residents with less than a high school diploma. Based on Calculation 2 shown below,  **Some Other Race residents are 217% more likely to not have graduated from high school or earned a GED, compared to their share in the county's population.** I surmise that this group likely contains residents who identify as Latinx as it is one of the most popular race categories to select for Latinx people. We could more accurately parse this and make more definitive statements if the ACS data had educational attainment by race measures that were further disaggregated by Hispanic/Latino ethnicity. 
+
+``` {r odds ratio math for Asian BA}
+
+# Calculation 1: % Likelihood of Asian residents having a BA or higher
+asian_ba_or <- ((((scc_edbyrace %>% 
+  filter(educational_attainment == "Bachelor's degree or higher") %>% 
+  filter(race == "Asian Alone") %>% 
+  pull(estimate) %>% 
+  sum()) /
+  (scc_edbyrace %>% 
+   filter(educational_attainment == "Bachelor's degree or higher") %>% 
+    pull(estimate) %>% 
+    sum())) / ((scc_race_totals$estimate[2])/sum(scc_race_totals$estimate)) - 1) * 100) %>% 
+  round()
+
+scales::label_percent(asian_ba_or, scale = 1, prefix = "Asian residents are ", suffix = "% more likely to have earned at least a bachelor's degree.")(asian_ba_or)
+
+```
+``` {r odds ratio math for other race Less than HS degree}
+
+# Calculation 2: % Likelihood of Other race residents having less than an HS diploma
+other_lhs_or <- ((((scc_edbyrace %>% 
+  filter(educational_attainment == "Less than high school diploma") %>% 
+  filter(race == "Some Other Race Alone") %>% 
+  pull(estimate) %>% 
+  sum()) /
+  (scc_edbyrace %>% 
+   filter(educational_attainment == "Less than high school diploma") %>% 
+    pull(estimate) %>% 
+    sum())) / ((scc_race_totals$estimate[5])/sum(scc_race_totals$estimate)) - 1) * 100) %>% 
+  round() 
+
+scales::label_percent(other_lhs_or, scale = 1, prefix = "Other race residents are ", suffix = "% more likely to not have earned a high school diploma or GED.")(other_lhs_or)
+
+```
+**Conclusion: There is disproportionate educational attainment by race in Santa Clara County.** Some other race residents have substantially lower levels of educational attainment than we would expect if there was no relationship between race and education. The difference is quite stark compared to Asian and white residents in the county. Similar to some other race, though a little less pronounced, Black residents tend to make-up a larger proportion of people in the lower levels of educational attainment than their share in the county at large would suggest if there was no relationship between race and educational attainment. 
+
+*Notes on assumptions and Limitations:*
+
+**The measure of educational attainment lacks some granularity,** in particular Latinx/Hispanic ethnicity. This limits the ability to learn more about the some-other race group, who happen to have the least favorable educational outcomes. Additionally, the proportion of whites per each educational attainment level might be different if the measure were disaggregated by Latinx/Hispanic ethnicity.
+
+**The point of reference in the analysis of disproportionate outcomes is the race group's proportion in the county overall, however, depending on one's definition of equity of outcomes a different reference category may be more appropriate.** There could be cases where equity of outcomes is considered based on a particular threshold, i.e., within each race group, 40% should have attained a Bachelor's degree. A different conceptualization of equity would warrant a different type of analysis. 
+
+**This analysis also assumes that the having a Bachelor's or higher degree is the ideal outcome, but it is possible to conceive of any college/technical school training being considered ideal/favorable too.** There are still needs for people to fulfill jobs that require associates/technical degrees, so representation in this category could be elevated in a separate analysis.
+
+
+
+## Access to Internet for K-12 Students
+In the pandemic, access to Internet has become more important than ever. This is particularly true for school-aged residents of Santa Clara County as classes have moved online in order to reduce risk to all members of the community. Given the importance of access to the Internet for the continuity of schooling, this analysis sought to understand whether any gaps in access to Internet exist for Santa Clara County's K-12 students?
+
+**About the Data Preparation**
+
+* **Data:** ACS-PUMS 2019 1-year estimates.
+* **Geographic Unit:** PUMA
+* **Outcome of Interest:** No access to the Internet.
+This is measured is constructed into a binary variable - no access to the Internet and access to the Internet. 
+* **Groups of Interest:** K-12 Students.
+The number of students in grades kindergarten to 12 were aggregated. 
+* **Measurement:** The total number and percent of K-12 students lacking access to the Internet per PUMA in Santa Clara County. Person weights are applied to the estimates in this analysis to more accurately quantify the number and relative share of Internet access in the county. 
+
+``` {r load internet access data, eval = F}
+# Load ACS-PUMS level data
+census_api_key("99ccb52a629609683f17f804ca875115e3f0804c")
+
+pums_vars_2019 <- 
+  pums_variables %>%
+  filter(year == 2019, survey == "acs1")
+
+pums_vars_2019_person <- 
+  pums_vars_2019 %>%
+  distinct(var_code, var_label, data_type, level) %>% 
+  filter(level == "person")
+
+ca_pums <- get_pums(
+  variables = c(
+    "PUMA",
+    "ACCESS",
+    "SCHG",
+    "PWGTP"
+  ),
+  state = "CA",
+  year = 2019,
+  survey = "acs1",
+  recode = T
+)
+
+saveRDS(ca_pums, "ca_pums.rds")
+
+```
+
+``` {r load Internet data and shapefiles, echo = T}
+# Load PUMS DATA
+ca_pums <- readRDS("ca_pums.rds")
+
+# LOAD SHAPEFILES
+ca_pumas <-
+  pumas("CA", cb = T, progress_bar = F) %>% 
+  st_transform(4326)
+
+sc_county <-
+  counties("CA", cb = T, progress_bar = F) %>%
+  filter(NAME == "Santa Clara") %>% 
+  st_transform(4326)
+```
+
+
+``` {r internet and pums data cleaning}
+# Cleaning PUMAS shapefiles & PUMS data
+scc_pumas <-
+  ca_pumas %>% 
+  st_centroid() %>% 
+  .[sc_county, ] %>% 
+  st_set_geometry(NULL) %>% 
+  left_join(ca_pumas %>% select(GEOID10)) %>% 
+  st_as_sf()
+
+scc_pums <-
+  ca_pums %>% 
+  filter(PUMA %in% scc_pumas$PUMACE10)
+
+scc_pums_internet <-
+  scc_pums %>% 
+  mutate(
+    SCHG = as.numeric(SCHG),
+    students_without_internet = ifelse(
+      (ACCESS == "3") &
+        (SCHG %in% (02:14)),
+      PWGTP,
+      0
+    )) %>% 
+  group_by(PUMA) %>% 
+  summarize(
+    number_students_no_internet = sum(students_without_internet, na.rm =T),
+    percent_students_no_internet =
+    (number_students_no_internet/sum(PWGTP, na.rm = T))* 100) %>% 
+  left_join(
+    scc_pumas %>% 
+      select(PUMACE10, NAME10),
+    by = c("PUMA" = "PUMACE10")
+  ) %>% 
+  st_as_sf()
+
+```
+
+## Map of Inaccess to Internet for K-12 Students
+
+Figure 2, presented below, shows that there are not many substantial gaps in access to the Internet for K-12 students in Santa Clara County. There is not a single PUMA with more than 1% of K-12 students lacking access to the Internet.
+
+``` {r Map of Internet Access %}
+# Map % of K-12 students lack of access to Internet
+pums_pal <- colorNumeric(
+  palette = "Oranges",
+  domain = scc_pums_internet$percent_students_no_internet
+)
+
+leaflet() %>%
+  addTiles() %>% 
+  addPolygons(
+    data = scc_pums_internet,
+    fillColor = ~pums_pal(percent_students_no_internet),
+    color = "white",
+    opacity = 0.5,
+    fillOpacity = 0.5,
+    weight = 1,
+    label = ~paste0(
+      round(percent_students_no_internet, digits = 2), 
+      "% K-12 students without Internet access"
+    ),
+    highlightOptions = highlightOptions(
+      weight = 2,
+      opacity = 1
+    )
+  ) %>% 
+  addLegend(
+    data = scc_pums_internet,
+    pal = pums_pal,
+    values = ~percent_students_no_internet,
+    title = "Figure 2: % K-12 students <br>without Internet access"
+  )
+
+```
+
+The table below also shows the number of students who lack access to Internet in each PUMA.
+``` {r Table of Internet Access #}
+
+knitr::kable(scc_pums_internet %>%
+  st_set_geometry(., NULL) %>%
+  mutate(
+    percent_students_no_internet = scales::percent(
+    x = percent_students_no_internet,
+    accuracy = 0.01, scale = 1,
+    label = "%"),
+    number_students_no_internet = as.character(number_students_no_internet)) %>%
+  select(`K-12 Students without Internet` = "number_students_no_internet",
+         `% K-12 Students without Internet` = "percent_students_no_internet",
+         NAME10) %>%
+  mutate(
+    NAME10 = str_remove(NAME10, "Santa Clara County " ),
+    NAME10 = gsub("[()]", "", NAME10)) %>%
+   separate(
+    "NAME10",
+    into = c("Region","Cities/Neighborhoods"),
+    sep = "--"
+  ) %>%
+  relocate("Region", "Cities/Neighborhoods") 
+)
+```
+
+# Takeaways from Internet Access Analysis
+
+* **Lack of access to the Internet among the K-12 student population is not prevalent in the county.** 
+* There are two PUMAs approaching 1% of students lacking access to the Internet. 
+  +  San Jose City South Central/Branham & Cambrian Park has about 1,032 students lacking access to the Internet, 0.93% of the K-12 student population. 
+  + San Jose City East Central & Alum Rock has about 941 students lacking access to the Internet, which is 0.87% of the K-12 student population.
+
+*Notes on assumptions and Limitations:*
+
+* **By using PUMAs as the geographic unit, we are trading off more granular geographic units for more recent individual-level estimates.** ACS has 5 year estimates at the Census Tract level, but these data would represent households and be less current.
+* **The measure of Internet access is pretty coarse, and quality of Internet service is not captured in this measure.** Even in households that do have access, there are cases where quality can be so poor that access may perceived as low or limited. A future direction for this work would be to investigate quality of Internet service in the county and the Bay at large.   
+
+
+
+## Educational Mobility
+To what extent is the educational composition of Santa Clara County's residents driven by upward educational mobility of established residents or in-migration of highly educated people? This is an important question to address because of concerns about the substantial rate of gentrification and growth of affluence in the Bay Area and the displacement of disadvantaged populations, especially low-income or less-educated residents. 
+
+**About the Data Preparation**
+
+* **Data:** ACS 2019 1-year estimates.
+* **Geographic Unit:** County
+* **Outcomes of Interest:** Mobility flows - External net and Internal net. 
+  + External net: The difference between new people moving into the county and established residents moving out. 
+  + Internal net: Demographic changes occurring within the county, i.e., aging and deaths. This is measure is constructed by subtracting the external net value and the total number of people who resided in the county in 2018 from the number of people who resided in the county in 2019.  
+* **Groups of Interest:** Educational-attainment levels - 5 categories. 
+  + Less than high school graduate
+  + High school graduate (includes equivalency)
+  + Some college or associate's degree
+  + Bachelor's degree
+  + Graduate or professional degree
+
+``` {r import mobility data}
+# Import ACS mobility datasets and reshape for migration analysis
+acs_vars_2019_1yr <-
+  listCensusMetadata(
+    name = "2019/acs/acs1",
+    type = "variables"
+  )
+
+scc_mobility_current_19 <- 
+  getCensus(
+    name = "acs/acs1",
+    vintage = 2019,
+    region = "county:085",
+    regionin = "state:06",
+    vars = c("group(B07009)")
+  ) %>% 
+  select(!c(GEO_ID,state,NAME) & !ends_with(c("EA","MA","M"))) %>%
+  pivot_longer(
+    ends_with("E"),
+    names_to = "variable",
+    values_to = "estimate"
+  ) %>%
+  left_join(
+    acs_vars_2019_1yr %>% 
+      select(name, label), 
+    by = c("variable" = "name")
+  ) %>% 
+  select(-variable) %>% 
+  separate(
+    label,
+    into = c(NA, NA, "mobility", "educational_attainment"),
+    sep = "!!"
+  ) %>% 
+  mutate(
+    mobility = ifelse(
+      mobility %in% c("Same house 1 year ago:", "Moved within same county:"),
+      "Here since last year",
+      "Inflow"
+    )
+  ) %>% 
+  filter(!is.na(educational_attainment)) %>% 
+  group_by(mobility, educational_attainment) %>% 
+  summarize(estimate = sum(estimate))
+
+scc_mobility_lastyear_19 <- 
+  getCensus(
+    name = "acs/acs1",
+    vintage = 2019,
+    region = "county:085",
+    regionin = "state:06",
+    vars = c("group(B07409)")
+  ) %>% 
+  select(!c(GEO_ID,state,NAME) & !ends_with(c("EA","MA","M"))) %>%
+  pivot_longer(
+    ends_with("E"),
+    names_to = "variable",
+    values_to = "estimate"
+  ) %>%
+  left_join(
+    acs_vars_2019_1yr %>% 
+      select(name, label), 
+    by = c("variable" = "name")
+  ) %>% 
+  select(-variable) %>% 
+  separate(
+    label,
+    into = c(NA, NA, "mobility", "educational_attainment"),
+    sep = "!!"
+  ) %>% 
+  mutate(
+    mobility = ifelse(
+      mobility %in% c("Same house:", "Moved within same county:"),
+      "Here since last year",
+      "Outflow"
+    )
+  ) %>% 
+  filter(!is.na(educational_attainment)) %>% 
+  group_by(mobility, educational_attainment) %>% 
+  summarize(estimate = sum(estimate))
+
+scc_mobility_current_18 <- 
+  getCensus(
+    name = "acs/acs1",
+    vintage = 2018,
+    region = "county:085",
+    regionin = "state:06",
+    vars = c("group(B07009)")
+  ) %>% 
+  select(!c(GEO_ID,state,NAME) & !ends_with(c("EA","MA","M"))) %>%
+  pivot_longer(
+    ends_with("E"),
+    names_to = "variable",
+    values_to = "estimate"
+  ) %>%
+  left_join(
+    acs_vars_2019_1yr %>% 
+      select(name, label), 
+    by = c("variable" = "name")
+  ) %>% 
+  select(-variable) %>% 
+  separate(
+    label,
+    into = c(NA, NA, "mobility", "educational_attainment"),
+    sep = "!!"
+  ) %>% 
+  mutate(mobility = "Here last year") %>% 
+  filter(!is.na(educational_attainment)) %>% 
+  group_by(mobility, educational_attainment) %>% 
+  summarize(estimate = sum(estimate))
+
+```
+
+Below is a table of the mobility flows by educational attainment in the county. 
+
+``` {r calculate flows}
+# Calculate Mobility Flows 
+scc_flows_19 <-
+  rbind(
+    scc_mobility_current_18,
+    scc_mobility_lastyear_19 %>% 
+      filter(mobility == "Outflow"),
+    scc_mobility_current_19 %>% 
+      filter(mobility == "Inflow"),
+    scc_mobility_current_19 %>% 
+      group_by(educational_attainment) %>% 
+      summarize(estimate = sum(estimate)) %>% 
+      mutate(mobility = "Here this year")
+  ) %>% 
+  pivot_wider(
+    names_from = mobility,
+    values_from = estimate
+  ) %>% 
+  mutate(
+    `External net` = Inflow - Outflow,
+    `Internal net` = `Here this year` - `Here last year` - `External net`,
+    educational_attainment = fct_relevel(educational_attainment,
+                      "Less than high school graduate",
+                       "High school graduate (includes equivalency)",
+                       "Some college or associate's degree",
+                       "Bachelor's degree",
+                       "Graduate or professional degree") 
+  ) %>% 
+  select(
+    `Educational Attainment` = educational_attainment, 
+    `Internal net`,
+    `External net`,
+    `Here last year`, 
+    `Here this year`, 
+    Outflow, 
+    Inflow
+  ) %>%
+  arrange(`Educational Attainment`)
+
+knitr::kable(scc_flows_19)
+
+```
+
+The net flows are visualized below in Figure 3.
+
+``` {r graph of internal v. external net educational mobility}
+# Graph interal and external nets by educational mobility
+scc_flows_19_long <- scc_flows_19 %>%
+  select(`Educational Attainment`:`External net`) %>%
+  pivot_longer(!`Educational Attainment`,
+               names_to = "Mobility",
+               values_to = "People") %>%
+  mutate(`Educational Attainment` = 
+           gsub("\\(.*?)",
+                "or GED",
+                `Educational Attainment`)) %>%
+  mutate(`Educational Attainment` = factor(`Educational Attainment`,
+                                           levels = c(
+                                            "Less than high school graduate",
+                                            "High school graduate or GED",
+                                            "Some college or associate's degree",
+                                            "Bachelor's degree",
+                                            "Graduate or professional degree"))
+         ) 
+
+plot_ly() %>% 
+  add_trace(
+    data = scc_flows_19_long %>% filter(Mobility == "Internal net"),
+    x = ~`Educational Attainment`,
+    y = ~People,
+    type = "bar",
+    name = "Internal net"
+  ) %>% 
+  add_trace(
+    data = scc_flows_19_long %>% filter(Mobility == "External net"),
+    x = ~`Educational Attainment`,
+    y = ~People,
+    type = "bar",
+    name = "External net"
+  ) %>% 
+  layout(title = "Figure 3: Educational Mobility<br> in Santa Clara County, CA",
+    xaxis = list(
+      title = "Educational Attainment",
+      fixedrange = T
+    ),
+    yaxis = list(
+      title = "Number of People",
+      fixedrange = T
+    ),
+    barmode = "group",
+    legend = list(title = list(text = "Flow type"))
+  ) %>% 
+  config(displayModeBar = F)
+
+```
+
+# Takeaways from Educational Mobility Flows Analysis
+
+*Geographic Mobility & Educational Attainment*
+
+**There are more graduate and professional degree holders moving into Santa Clara County than out of the county.** This is evinced in the graduate and professional degree holders having the highest external net flow of all the educational attainment categories. There were 10,000 more people with graduate or professional degrees moving into the county from 2018-2019. 
+
+**No other educational attainment category saw significantly more movement into the county than out of the county.** Surprisingly, Bachelor's degree holders had roughly similar inflows and outflows.
+
+**On the flipside, more people with some college/associate's degree category were moving out of Santa Clara County than in.** 3,394 people with some college or an associate's degree left the county between 2018 and 2019. 
+
+*Demographic Changes & Educational Attainment*
+
+**Residents without a high school degree had the greatest internal net flows.** 3,780 people who lived in Santa Clara in 2018, but were not part of the educational-attainment universe, aged into the educational-attainment population and do not possess a high school degree. This signals that this group saw gains in the number of people aging into this category, i.e., young people turning 25, or by untracked immigration from foreign countries.  
+
+**The county saw a noticeable declines in established residents (i.e., who were living in the county last year) with Bachelor's as well as Graduate and Professional degrees.** The county lost 4,379 BA/BS holders and 6,143 Graduate and Professional degree holders. This signals that these more established, highly-educated residents experienced more deaths than demographic gains from 2018 to 2019. 
+
+**Conclusion:** Increasing educational attainment in Santa Clara County is a product of highly educated newcomers than increasing educational mobility among established residents of Santa Clara. There is not clear evidence of less educated established residents being displaced because the magnitude of external net flows is very low. If there is displacement of less educated residents, then it is not prevalent in the county. 
+
+
+*Notes on assumptions and Limitations:*
+
+* **Untracked migration from other countries will not be picked up in these measures.** Thus, this analysis may be considered an underestimate of the true flows in the county. It is not clear what educational attainment category would see increases from untracked migration. 
+* **The time span for this mobility analysis is only a year, which would preclude high levels of migration to the county that occurred in previous years.** It is possible that widening the time frame would show higher levels of displacement as gentrification and the growth of the knowledge economy in the Bay has been an ongoing phenomenon, particularly in the last 10 years. 
